@@ -1,0 +1,113 @@
+version: '2'
+services:
+  themis-base:
+    container_name: themis-base
+    build:
+      context: .
+      args:
+        - GITHUB_TOKEN
+    image: quay.io/hearst/themis
+    environment:
+      VIRTUAL_HOST: themis.docker
+      REDIS_HOST: themis-redis
+      REDIS_PORT: 6379
+      VOLTRON_URL: https://voltron.stage.hearstapps.net/graphql
+      PGHOST: themis-postgres
+      PGPORT: 5432
+      PGDATABASE: themis
+      PGUSER: themis
+      PGPASSWORD: password
+    command: ["echo", "I only exist to be extended so I'll just exit, thanks"]
+
+  themis:
+    container_name: themis
+    extends: themis-base
+    depends_on:
+      - themis-redis
+      - themis-postgres
+    ports:
+      - 80
+    volumes:
+      - ${PWD}:/app
+    command: ["gunicorn", "-k uvicorn.workers.UvicornWorker", "-b 0.0.0.0:80", "themis.app:app"]
+
+  themis-nginx:
+    container_name: themis-nginx
+    image: nginx:1.17.5-alpine
+    volumes:
+      - ${PWD}:/app
+    environment:
+      - LOG_FORMAT=json
+      - VIRTUAL_HOST=themis.docker
+    depends_on:
+      - themis
+    ports:
+      - 80
+    command: [
+      "/bin/sh",
+      "-c", "envsubst '$$LOG_FORMAT' < /app/k8s/docker-nginx.conf > /etc/nginx/nginx.conf && nginx"
+    ]
+
+  themis-redis:
+    container_name: themis-redis
+    image: redis:5.0.7-alpine
+
+  themis-postgres:
+    container_name: themis-postgres
+    image: postgres:11.7-alpine
+    environment:
+      VIRTUAL_HOST: themis-postgres.docker
+      POSTGRES_DB: themis
+      POSTGRES_USER: themis
+      POSTGRES_PASSWORD: password
+    ports:
+      - 5432
+
+  themis-worker:
+    container_name: themis-worker
+    extends: themis-base
+    depends_on:
+      - themis-redis
+      - themis-postgres
+    volumes:
+      - ${PWD}:/app
+    environment:
+      LOG_LEVEL: INFO
+      DISPATCHR_QUEUE_NAME: dispatchr-queue
+    command: ["flask", "process-queue"]
+
+  themis-test:
+    container_name: themis-test
+    extends: themis-base
+    depends_on:
+      - themis-test-redis
+      - themis-test-postgres
+    environment:
+      - FLASK_DEBUG
+      - VCR_MODE
+      - NEW_RELIC_LICENSE_KEY=testing
+      - REDIS_HOST=themis-test-redis
+      - PGHOST=themis-test-postgres
+      - DISPATCHR_HOST=dispatchr.kubestage.hearstapps.net
+      - DISPATCHR_PROTOCOL=http
+      - themis_CANONICAL_TOPIC_NAME=bark-sns-topic
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ${PWD}:/app
+    command: [
+      "python", "-m", "pytest", "-vv", "--cov-report=term-missing", "--cov=themis",
+      "--cov-config=setup.cfg", "--cov-fail-under=100", "themis/tests"
+    ]
+
+  themis-test-postgres:
+    container_name: themis-test-postgres
+    extends: themis-postgres
+    environment:
+      - VIRTUAL_HOST=themis-test-postgres.docker
+      - PGDATA=/tmp
+
+  themis-test-redis:
+    container_name: themis-test-redis
+    extends: themis-redis
