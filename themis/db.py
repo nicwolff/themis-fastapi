@@ -24,6 +24,5 @@ themes = Table(
     Column('theme', JSONB, nullable=False),
     Column('created_at', DateTime, nullable=False, default=now),
     Column('updated_at', DateTime, nullable=False, default=now, onupdate=now),
-    Index('themes_resource_id_idx', 'resource_id', unique=True),
     Index('themes_idx', 'resource_id', 'slug', unique=True),
 )
